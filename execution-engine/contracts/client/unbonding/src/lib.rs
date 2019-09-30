@@ -1,7 +1,5 @@
 #![no_std]
 
-#[macro_use]
-extern crate alloc;
 extern crate contract_ffi;
 use contract_ffi::contract_api::{self, Error};
 use contract_ffi::value::uint::U512;
@@ -24,5 +22,5 @@ pub extern "C" fn call() {
         None => contract_api::revert(Error::MissingArgument.into()),
     };
 
-    contract_api::call_contract(pos_pointer, &(UNBOND_METHOD_NAME, unbond_amount), &vec![])
+    contract_api::call_contract(pos_pointer, &(UNBOND_METHOD_NAME, unbond_amount))
 }

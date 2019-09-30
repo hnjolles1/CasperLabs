@@ -2,7 +2,7 @@ mod args;
 mod externals;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::iter::IntoIterator;
 
 use itertools::Itertools;
@@ -16,8 +16,9 @@ use contract_ffi::key::Key;
 use contract_ffi::system_contracts::{self, mint};
 use contract_ffi::uref::{AccessRights, URef};
 use contract_ffi::value::account::{ActionType, PublicKey, PurseId, Weight, PUBLIC_KEY_SIZE};
-use contract_ffi::value::{Account, ProtocolVersion, Value, U512};
+use contract_ffi::value::{self, Account, ProtocolVersion, Value, U512};
 use engine_shared::gas::Gas;
+use engine_shared::newtypes::Validated;
 use engine_storage::global_state::StateReader;
 
 use super::{Error, MINT_NAME, POS_NAME};
@@ -30,7 +31,7 @@ use crate::Address;
 pub struct Runtime<'a, R> {
     memory: MemoryRef,
     module: Module,
-    result: Vec<u8>,
+    result: Value,
     host_buf: Vec<u8>,
     context: RuntimeContext<'a, R>,
 }
@@ -123,26 +124,31 @@ pub fn extract_access_rights_from_keys<I: IntoIterator<Item = Key>>(
 
 fn sub_call<R: StateReader<Key, Value>>(
     parity_module: Module,
-    args: Vec<Vec<u8>>,
+    args: Vec<Validated<Value>>,
     refs: &mut BTreeMap<String, Key>,
     key: Key,
     current_runtime: &mut Runtime<R>,
-    // Unforgable references passed across the call boundary from caller to callee
-    //(necessary if the contract takes a uref argument).
-    extra_urefs: Vec<Key>,
     protocol_version: ProtocolVersion,
-) -> Result<Vec<u8>, Error>
+) -> Result<Value, Error>
 where
     R::Error: Into<Error>,
 {
     let (instance, memory) = instance_and_memory(parity_module.clone(), protocol_version)?;
 
-    let known_urefs = extract_access_rights_from_keys(refs.values().cloned().chain(extra_urefs));
+    // Extract passed urefs from all of the arguments
+    let extracted_urefs: Vec<Key> = args
+        .iter()
+        .flat_map(|validated_value| validated_value.extract_urefs())
+        .map(Key::URef)
+        .collect();
+
+    let known_urefs =
+        extract_access_rights_from_keys(refs.values().cloned().chain(extracted_urefs.into_iter()));
 
     let mut runtime = Runtime {
         memory,
         module: parity_module,
-        result: Vec::new(),
+        result: Value::Unit,
         host_buf: Vec::new(),
         context: RuntimeContext::new(
             current_runtime.context.state(),
@@ -175,10 +181,10 @@ where
                 // in the Runtime result field.
                 let downcasted_error = host_error.downcast_ref::<Error>().unwrap();
                 match downcasted_error {
-                    Error::Ret(ref ret_urefs) => {
+                    Error::Ret(ret_urefs) => {
                         //insert extra urefs returned from call
-                        let ret_urefs_map: HashMap<Address, HashSet<AccessRights>> =
-                            extract_access_rights_from_urefs(ret_urefs.clone());
+                        let ret_urefs_map =
+                            extract_access_rights_from_urefs(ret_urefs.iter().cloned());
                         current_runtime.context.add_urefs(ret_urefs_map);
                         return Ok(runtime.result);
                     }
@@ -204,14 +210,14 @@ where
         Runtime {
             memory,
             module,
-            result: Vec::new(),
+            result: Value::Unit,
             host_buf: Vec::new(),
             context,
         }
     }
 
-    pub fn result(&self) -> &[u8] {
-        self.result.as_slice()
+    pub fn result(&self) -> &Value {
+        &self.result
     }
 
     pub fn context(&self) -> &RuntimeContext<'a, R> {
@@ -298,17 +304,18 @@ where
     /// Load the i-th argument invoked as part of a `sub_call` into
     /// the runtime buffer so that a subsequent `get_arg` can return it
     /// to the caller.
-    pub fn load_arg(&mut self, i: usize) -> isize {
-        match self.context.args().get(i) {
+    pub fn load_arg(&mut self, i: usize) -> Result<isize, Trap> {
+        let size = match self.context.args().get(i) {
             Some(arg) => {
-                self.host_buf = arg.clone();
+                self.host_buf = arg.get().to_bytes().map_err(Error::BytesRepr)?;
                 self.host_buf.len() as isize
             }
             None => {
                 self.host_buf.clear();
                 -1
             }
-        }
+        };
+        Ok(size)
     }
 
     /// Load the uref known by the given name into the Wasm memory
@@ -399,29 +406,28 @@ where
     /// Return a some bytes from the memory and terminate the current
     /// `sub_call`. Note that the return type is `Trap`, indicating that
     /// this function will always kill the current Wasm instance.
-    pub fn ret(
-        &mut self,
-        value_ptr: u32,
-        value_size: usize,
-        extra_urefs_ptr: u32,
-        extra_urefs_size: usize,
-    ) -> Trap {
-        let mem_get = self
+    pub fn ret(&mut self, value_ptr: u32, value_size: usize) -> Trap {
+        let mem_get: Result<Value, _> = self
             .memory
             .get(value_ptr, value_size)
             .map_err(Error::Interpreter)
-            .and_then(|x| {
-                let urefs_bytes = self.bytes_from_mem(extra_urefs_ptr, extra_urefs_size)?;
-                let urefs = self.context.deserialize_urefs(&urefs_bytes)?;
-                Ok((x, urefs))
-            });
+            .and_then(|value_bytes| deserialize(&value_bytes).map_err(Error::BytesRepr));
         match mem_get {
-            Ok((buf, urefs)) => {
+            Ok(value) => {
+                // Extract and validate URefs of a returned Value
+                let extracted_urefs = value.extract_urefs();
+
+                if let Err(err) = self.context.validate_urefs(&extracted_urefs) {
+                    // Returns error if one of the extracted URefs can't be validated
+                    return err.into();
+                }
+
                 // Set the result field in the runtime and return
                 // the proper element of the `Error` enum indicating
                 // that the reason for exiting the module was a call to ret.
-                self.result = buf;
-                Error::Ret(urefs).into()
+                self.result = value;
+
+                Error::Ret(extracted_urefs).into()
             }
             Err(e) => e.into(),
         }
@@ -429,18 +435,13 @@ where
 
     /// Calls contract living under a `key`, with supplied `args` and extra
     /// `urefs`.
-    pub fn call_contract(
-        &mut self,
-        key: Key,
-        args_bytes: Vec<u8>,
-        urefs_bytes: Vec<u8>,
-    ) -> Result<usize, Error> {
+    pub fn call_contract(&mut self, key: Key, args_bytes: Vec<u8>) -> Result<usize, Error> {
         let (args, module, mut refs, protocol_version) = {
             match self.context.read_gs(&key)? {
                 None => Err(Error::KeyNotFound(key)),
                 Some(value) => {
                     if let Value::Contract(contract) = value {
-                        let args: Vec<Vec<u8>> = deserialize(&args_bytes)?;
+                        let args: Vec<Value> = value::deserialize_arguments(&args_bytes)?;
                         let module = parity_wasm::deserialize_buffer(contract.bytes())?;
 
                         Ok((
@@ -459,17 +460,23 @@ where
             }
         }?;
 
-        let extra_urefs = self.context.deserialize_keys(&urefs_bytes)?;
+        // Validate each passed value
+        let validated_args = args
+            .into_iter()
+            .map(|value| Validated::new(value, |val| self.context.validate_keys(val)))
+            .collect::<Result<Vec<_>, _>>()?;
+
         let result = sub_call(
             module,
-            args,
+            validated_args,
             &mut refs,
             key,
             self,
-            extra_urefs,
             protocol_version,
         )?;
-        self.host_buf = result;
+        // TODO(mpapierski): Inside `sub_call` call returned value is deserialized just to be
+        // serialized here again. `sub_call`
+        self.host_buf = result.to_bytes()?;
         Ok(self.host_buf.len())
     }
 
@@ -708,15 +715,13 @@ where
     fn mint_create(&mut self, mint_contract_key: Key) -> Result<PurseId, Error> {
         let args_bytes = {
             let args = ("create",);
-            ArgsParser::parse(&args).and_then(|args| args.to_bytes())?
+            ArgsParser::parse(&args)?
         };
 
-        let urefs_bytes = Vec::<Key>::new().to_bytes()?;
+        self.call_contract(mint_contract_key, args_bytes)?;
 
-        self.call_contract(mint_contract_key, args_bytes, urefs_bytes)?;
-
-        let result: URef = deserialize(&self.host_buf)?;
-
+        let result_value: Value = deserialize(&self.host_buf)?;
+        let result: URef = result_value.try_into().map_err(Error::TypeMismatch)?;
         Ok(PurseId::new(result))
     }
 
@@ -739,16 +744,15 @@ where
 
         let args_bytes = {
             let args = ("transfer", source_value, target_value, amount);
-            ArgsParser::parse(&args).and_then(|args| args.to_bytes())?
+            ArgsParser::parse(&args)?
         };
 
-        let urefs_bytes = vec![Key::URef(source_value), Key::URef(target_value)].to_bytes()?;
-
-        self.call_contract(mint_contract_key, args_bytes, urefs_bytes)?;
+        self.call_contract(mint_contract_key, args_bytes)?;
 
         // This will deserialize `host_buf` into the Result type which carries
         // mint contract error.
-        let result: Result<(), mint::error::Error> = deserialize(&self.host_buf)?;
+        let result: Value = deserialize(&self.host_buf)?;
+        let result: Result<(), mint::error::Error> = result.try_deserialize()?;
         // Wraps mint error into a more general error type through an aggregate
         // system contracts Error.
         Ok(result.map_err(system_contracts::error::Error::from)?)

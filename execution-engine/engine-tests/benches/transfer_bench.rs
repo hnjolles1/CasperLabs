@@ -43,6 +43,7 @@ fn bootstrap(accounts: &[PublicKey]) -> (WasmTestResult<LmdbGlobalState>, TempDi
             STANDARD_PAYMENT_CONTRACT,
             (U512::from(MAX_PAYMENT),),
             "create_accounts.wasm",
+            // TODO(mpapierski): Identify additional Value variants
             (accounts_bytes, amount), //args
             DEFAULT_BLOCK_TIME,       // blocktime
             [1; 32],                  // deploy_hash

@@ -1,6 +1,5 @@
 #![no_std]
 
-#[macro_use]
 extern crate alloc;
 extern crate contract_ffi;
 extern crate pos;
@@ -10,7 +9,6 @@ use alloc::string::String;
 use contract_ffi::contract_api::pointers::{ContractPointer, TURef};
 use contract_ffi::contract_api::{self, Error};
 use contract_ffi::key::Key;
-use contract_ffi::system_contracts::mint;
 use contract_ffi::uref::{AccessRights, URef};
 use contract_ffi::value::account::{PublicKey, PurseId};
 use contract_ffi::value::U512;
@@ -42,6 +40,7 @@ pub extern "C" fn call() {
     };
     let mint = ContractPointer::URef(TURef::new(mint_uref.addr(), AccessRights::READ));
 
+    // TODO(mpapierski): Identify additional Value variants
     let genesis_validators: BTreeMap<PublicKey, U512> =
         match contract_api::get_arg(Args::GenesisValidators as u32) {
             Some(Ok(data)) => data,
@@ -92,14 +91,11 @@ pub extern "C" fn call() {
     let contract = contract_api::fn_by_name("pos_ext", known_urefs);
     let uref: URef = contract_api::new_turef(contract).into();
 
-    contract_api::ret(&uref, &vec![uref]);
+    contract_api::ret(uref);
 }
 
 fn mint_purse(mint: &ContractPointer, amount: U512) -> PurseId {
-    let result: Result<URef, mint::error::Error> =
-        contract_api::call_contract(mint.clone(), &("mint", amount), &vec![]);
+    let mint_uref: URef = contract_api::call_contract(mint.clone(), &("mint", amount));
 
-    result
-        .map(PurseId::new)
-        .unwrap_or_else(|_| contract_api::revert(Error::MintFailure.into()))
+    PurseId::new(mint_uref)
 }

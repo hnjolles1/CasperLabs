@@ -4,11 +4,11 @@ pub mod pointers;
 
 use self::alloc_util::*;
 use self::pointers::*;
-use crate::bytesrepr::{self, deserialize, FromBytes, ToBytes};
+use crate::bytesrepr::{self, deserialize, ToBytes};
 use crate::execution::{Phase, PHASE_SIZE};
 use crate::ext_ffi;
 use crate::key::{Key, UREF_SIZE};
-use crate::uref::{AccessRights, URef};
+use crate::uref::AccessRights;
 use crate::value::account::{
     Account, ActionType, AddKeyFailure, BlockTime, PublicKey, PurseId, RemoveKeyFailure,
     SetThresholdFailure, UpdateKeyFailure, Weight, BLOCKTIME_SER_SIZE, PURSE_ID_SIZE_SERIALIZED,
@@ -377,7 +377,10 @@ fn load_arg(index: u32) -> Option<usize> {
 /// Return the i-th argument passed to the host for the current module
 /// invocation. Note that this is only relevant to contracts stored on-chain
 /// since a contract deployed directly is not invoked with any arguments.
-pub fn get_arg<T: FromBytes>(i: u32) -> Option<Result<T, bytesrepr::Error>> {
+pub fn get_arg<T>(i: u32) -> Option<Result<T, bytesrepr::Error>>
+where
+    T: TryFrom<Value>,
+{
     let arg_size = load_arg(i)?;
     let arg_bytes = {
         let dest_ptr = alloc_bytes(arg_size);
@@ -386,7 +389,10 @@ pub fn get_arg<T: FromBytes>(i: u32) -> Option<Result<T, bytesrepr::Error>> {
             Vec::from_raw_parts(dest_ptr, arg_size, arg_size)
         }
     };
-    Some(deserialize(&arg_bytes))
+    Some(deserialize::<Value>(&arg_bytes).and_then(|value| {
+        T::try_from(value)
+            .map_err(|_| bytesrepr::Error::custom("T could not be derived from Value"))
+    }))
 }
 
 /// Return the unforgable reference known by the current module under the given
@@ -452,11 +458,10 @@ pub fn get_blocktime() -> BlockTime {
 /// return a value to their caller. The return value of a directly deployed
 /// contract is never looked at.
 #[allow(clippy::ptr_arg)]
-pub fn ret<T: ToBytes>(t: &T, extra_urefs: &Vec<URef>) -> ! {
-    let (ptr, size, _bytes) = to_ptr(t);
-    let (urefs_ptr, urefs_size, _bytes2) = to_ptr(extra_urefs);
+pub fn ret<T: Into<Value>>(t: T) -> ! {
+    let (ptr, size, _bytes) = to_ptr(&t.into());
     unsafe {
-        ext_ffi::ret(ptr, size, urefs_ptr, urefs_size);
+        ext_ffi::ret(ptr, size);
     }
 }
 
@@ -465,26 +470,25 @@ pub fn ret<T: ToBytes>(t: &T, extra_urefs: &Vec<URef>) -> ! {
 /// execution. The value returned from the contract call (see `ret` above) is
 /// returned from this function.
 #[allow(clippy::ptr_arg)]
-pub fn call_contract<A: ArgsParser, T: FromBytes>(
-    c_ptr: ContractPointer,
-    args: &A,
-    extra_urefs: &Vec<Key>,
-) -> T {
+pub fn call_contract<A, T>(c_ptr: ContractPointer, args: &A) -> T
+where
+    A: ArgsParser,
+    T: TryFrom<Value>,
+    T::Error: Debug,
+{
     let contract_key: Key = c_ptr.into();
     let (key_ptr, key_size, _bytes1) = to_ptr(&contract_key);
-    let (args_ptr, args_size, _bytes2) = ArgsParser::parse(args).map(|args| to_ptr(&args)).unwrap();
-    let (urefs_ptr, urefs_size, _bytes3) = to_ptr(extra_urefs);
-    let res_size = unsafe {
-        ext_ffi::call_contract(
-            key_ptr, key_size, args_ptr, args_size, urefs_ptr, urefs_size,
-        )
-    };
+    let (args_ptr, args_size, _bytes2) = ArgsParser::parse(args).map(to_ptr_bytes).unwrap();
+    let res_size = unsafe { ext_ffi::call_contract(key_ptr, key_size, args_ptr, args_size) };
     let res_ptr = alloc_bytes(res_size);
     let res_bytes = unsafe {
         ext_ffi::get_call_result(res_ptr);
         Vec::from_raw_parts(res_ptr, res_size, res_size)
     };
-    deserialize(&res_bytes).unwrap()
+    // Deserialize returned Value
+    let value: Value = deserialize(&res_bytes).unwrap();
+    // Convert Value into desired type
+    value.try_into().unwrap()
 }
 
 /// Stops execution of a contract and reverts execution effects with a given reason.

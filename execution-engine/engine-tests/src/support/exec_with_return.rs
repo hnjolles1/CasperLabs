@@ -1,10 +1,10 @@
 use crate::support::test_support::{self, WasmTestBuilder};
-use contract_ffi::bytesrepr::{self, FromBytes};
 use contract_ffi::execution::Phase;
 use contract_ffi::key::Key;
 use contract_ffi::uref::URef;
 use contract_ffi::value::account::BlockTime;
 use contract_ffi::value::ProtocolVersion;
+use contract_ffi::value::{self, Value};
 use engine_core::engine_state::executable_deploy_item::ExecutableDeployItem;
 use engine_core::engine_state::execution_effect::ExecutionEffect;
 use engine_core::engine_state::EngineState;
@@ -13,7 +13,7 @@ use engine_core::execution::AddressGenerator;
 use engine_core::runtime_context::RuntimeContext;
 use engine_grpc_server::engine_server::ipc_grpc::ExecutionEngineService;
 use engine_shared::gas::Gas;
-use engine_shared::newtypes::CorrelationId;
+use engine_shared::newtypes::{CorrelationId, Validated};
 use engine_storage::global_state::StateProvider;
 use engine_wasm_prep::wasm_costs::WasmCosts;
 use engine_wasm_prep::WasmiPreprocessor;
@@ -29,7 +29,7 @@ const INIT_PROTOCOL_VERSION: u64 = 1;
 /// output. It is essentially the same functionality as `Executor::exec`, but the return value of
 /// the contract is returned along with the effects. The purpose of this function is to test
 /// installer contracts used in the new genesis process.
-pub fn exec<S, T>(
+pub fn exec<S>(
     builder: &mut WasmTestBuilder<S>,
     address: [u8; 32],
     wasm_file: &str,
@@ -37,12 +37,11 @@ pub fn exec<S, T>(
     deploy_hash: [u8; 32],
     args: impl contract_ffi::contract_api::argsparser::ArgsParser,
     extra_urefs: Vec<URef>,
-) -> Option<(T, Vec<URef>, ExecutionEffect)>
+) -> Option<(Value, Vec<URef>, ExecutionEffect)>
 where
     S: StateProvider,
     S::Error: Into<execution::Error>,
     EngineState<S>: ExecutionEngineService,
-    T: FromBytes,
 {
     let prestate = builder
         .get_post_state_hash()
@@ -67,7 +66,8 @@ where
     let gas_limit = Gas::from_u64(std::u64::MAX);
     let protocol_version = ProtocolVersion::new(INIT_PROTOCOL_VERSION);
     let correlation_id = CorrelationId::new();
-    let arguments: Vec<Vec<u8>> = args.parse().expect("should be able to serialize args");
+    let arguments = args.parse().expect("should be able to serialize args");
+
     let base_key = Key::Account(address);
 
     let account = builder.get_account(address).expect("should find account");
@@ -83,11 +83,18 @@ where
         from_account
     };
 
+    let arg_values = value::deserialize_arguments(&arguments).expect("should deserialize");
+
+    let validated_args = arg_values
+        .into_iter()
+        .map(|value| Validated::new(value, Validated::valid).unwrap())
+        .collect();
+
     let context = RuntimeContext::new(
         Rc::clone(&tracking_copy),
         &mut uref_lookup,
         known_urefs,
-        arguments,
+        validated_args,
         BTreeSet::new(),
         &account,
         base_key,
@@ -133,14 +140,9 @@ where
                 // `ret` Trap is a success; downcast and attempt to extract result
                 let downcasted_error = host_error.downcast_ref::<execution::Error>().unwrap();
                 match downcasted_error {
-                    execution::Error::Ret(ref ret_urefs) => {
+                    execution::Error::Ret(urefs) => {
                         let effect = runtime.context().effect();
-                        let urefs = ret_urefs.clone();
-
-                        let value: T = bytesrepr::deserialize(runtime.result())
-                            .expect("should deserialize return value");
-
-                        Some((value, urefs, effect))
+                        Some((runtime.result().to_owned(), urefs.clone(), effect))
                     }
 
                     _ => None,

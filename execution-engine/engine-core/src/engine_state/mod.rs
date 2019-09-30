@@ -9,6 +9,7 @@ pub mod utils;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::convert::TryInto;
 use std::rc::Rc;
 
 use num_traits::Zero;
@@ -17,11 +18,10 @@ use contract_ffi::bytesrepr::ToBytes;
 use contract_ffi::contract_api::argsparser::ArgsParser;
 use contract_ffi::execution::Phase;
 use contract_ffi::key::{Key, HASH_SIZE};
-use contract_ffi::system_contracts::mint;
 use contract_ffi::uref::URef;
 use contract_ffi::uref::{AccessRights, UREF_ADDR_SIZE};
 use contract_ffi::value::account::{BlockTime, PublicKey, PurseId};
-use contract_ffi::value::{Account, ProtocolVersion, Value, U512};
+use contract_ffi::value::{Account, ProtocolVersion, TypeMismatch, Value, U512};
 use engine_shared::gas::Gas;
 use engine_shared::motes::Motes;
 use engine_shared::newtypes::{Blake2bHash, CorrelationId, Validated};
@@ -218,7 +218,7 @@ where
             let address_generator = Rc::clone(&address_generator);
             let tracking_copy = Rc::clone(&tracking_copy);
 
-            executor.better_exec(
+            let result = executor.better_exec(
                 mint_installer_module,
                 &args,
                 &mut key_lookup,
@@ -233,7 +233,10 @@ where
                 correlation_id,
                 tracking_copy,
                 phase,
-            )?
+            )?;
+            result
+                .try_into()
+                .map_err(|type_mismatch| Error::ExecError(execution::Error::from(type_mismatch)))?
         };
 
         // Spec #7: Execute pos installer wasm code, passing the initially bonded validators as an
@@ -251,9 +254,7 @@ where
                     .map(|(k, v)| (k, v.value()))
                     .collect();
                 let args = (mint_reference, bonded_validators);
-                ArgsParser::parse(&args)
-                    .and_then(|args| args.to_bytes())
-                    .expect("args should parse")
+                ArgsParser::parse(&args).expect("args should parse")
             };
             let mut key_lookup = {
                 let mut ret = BTreeMap::new();
@@ -265,7 +266,7 @@ where
             let address_generator = Rc::clone(&address_generator);
             let tracking_copy = Rc::clone(&tracking_copy);
 
-            executor.better_exec(
+            let result = executor.better_exec(
                 proof_of_stake_installer_module,
                 &args,
                 &mut key_lookup,
@@ -280,7 +281,10 @@ where
                 correlation_id,
                 tracking_copy,
                 phase,
-            )?
+            )?;
+            result
+                .try_into()
+                .map_err(|type_mismatch| Error::ExecError(execution::Error::from(type_mismatch)))?
         };
 
         // Spec #2: Associate given CostTable with given ProtocolVersion.
@@ -356,9 +360,7 @@ where
                 let args = {
                     let motes = account.balance().value();
                     let args = (MINT_METHOD_NAME, motes);
-                    ArgsParser::parse(&args)
-                        .and_then(|args| args.to_bytes())
-                        .expect("args should parse")
+                    ArgsParser::parse(&args).expect("args should parse")
                 };
                 let tracking_copy_exec = Rc::clone(&tracking_copy);
                 let tracking_copy_write = Rc::clone(&tracking_copy);
@@ -373,7 +375,7 @@ where
                 };
 
                 // ...call the Mint's "mint" endpoint to create purse with tokens...
-                let mint_result: Result<URef, mint::error::Error> = executor.better_exec(
+                let result = executor.better_exec(
                     module,
                     &args,
                     &mut key_lookup,
@@ -389,6 +391,10 @@ where
                     tracking_copy_exec,
                     phase,
                 )?;
+
+                let mint_result = result.try_into().map_err(|type_mismatch| {
+                    Error::ExecError(execution::Error::from(type_mismatch))
+                });
 
                 // ...and write that account to global state...
                 let key = {
@@ -588,10 +594,7 @@ where
                         }
                         Some(key) => {
                             return Err(error::Error::ExecError(execution::Error::TypeMismatch(
-                                engine_shared::transform::TypeMismatch::new(
-                                    "Key::URef".to_string(),
-                                    key.type_string(),
-                                ),
+                                TypeMismatch::new("Key::URef".to_string(), key.type_string()),
                             )));
                         }
                         None => {
@@ -1004,9 +1007,10 @@ where
             let proof_of_stake_args = {
                 //((gas spent during payment code execution) + (gas spent during session code execution)) * conv_rate
                 let finalize_cost_motes: Motes = Motes::from_gas(execution_result_builder.total_cost(), CONV_RATE).expect("motes overflow");
-                let args = ("finalize_payment", finalize_cost_motes.value(), account_addr);
+                // TODO(mpapierski): Identify new Value vairants
+                let account = PublicKey::new(account_addr);
+                let args = ("finalize_payment", finalize_cost_motes.value(), account);
                 ArgsParser::parse(&args)
-                    .and_then(|args| args.to_bytes())
                     .expect("args should parse")
             };
 

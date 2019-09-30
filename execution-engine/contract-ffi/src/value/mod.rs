@@ -1,21 +1,26 @@
 pub mod account;
 pub mod contract;
+pub mod error;
 pub mod protocol_version;
 pub mod uint;
 
 use crate::bytesrepr::{
-    Error, FromBytes, ToBytes, U128_SIZE, U256_SIZE, U32_SIZE, U512_SIZE, U64_SIZE, U8_SIZE,
+    self, FromBytes, ToBytes, U128_SIZE, U256_SIZE, U32_SIZE, U512_SIZE, U64_SIZE, U8_SIZE,
 };
-use crate::key::{self, UREF_SIZE};
+use crate::execution::Phase;
+use crate::key::{self, Key, UREF_SIZE};
 use crate::uref::URef;
+use crate::value::account::Weight;
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::iter;
 use core::mem::size_of;
 
-pub use self::account::Account;
+pub use self::account::{Account, PublicKey, PurseId};
 pub use self::contract::Contract;
+pub use self::error::{Error, TypeMismatch};
 pub use self::protocol_version::ProtocolVersion;
 pub use self::uint::{U128, U256, U512};
 
@@ -55,7 +60,7 @@ const U64_ID: u8 = 13;
 use self::Value::*;
 
 impl ToBytes for Value {
-    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+    fn to_bytes(&self) -> Result<Vec<u8>, bytesrepr::Error> {
         match self {
             Int32(i) => {
                 let mut result = Vec::with_capacity(U8_SIZE + U32_SIZE);
@@ -83,7 +88,7 @@ impl ToBytes for Value {
             }
             ByteArray(arr) => {
                 if arr.len() >= u32::max_value() as usize - U8_SIZE - U32_SIZE {
-                    return Err(Error::OutOfMemoryError);
+                    return Err(bytesrepr::Error::OutOfMemoryError);
                 }
                 let mut result = Vec::with_capacity(U8_SIZE + U32_SIZE + arr.len());
                 result.push(BYTEARRAY_ID);
@@ -92,7 +97,7 @@ impl ToBytes for Value {
             }
             ListInt32(arr) => {
                 if arr.len() * size_of::<i32>() >= u32::max_value() as usize - U8_SIZE - U32_SIZE {
-                    return Err(Error::OutOfMemoryError);
+                    return Err(bytesrepr::Error::OutOfMemoryError);
                 }
                 let mut result = Vec::with_capacity(U8_SIZE + U32_SIZE + U32_SIZE * arr.len());
                 result.push(LISTINT32_ID);
@@ -101,7 +106,7 @@ impl ToBytes for Value {
             }
             String(s) => {
                 if s.len() >= u32::max_value() as usize - U8_SIZE - U32_SIZE {
-                    return Err(Error::OutOfMemoryError);
+                    return Err(bytesrepr::Error::OutOfMemoryError);
                 }
                 let size = U8_SIZE + U32_SIZE + s.len();
                 let mut result = Vec::with_capacity(size);
@@ -114,7 +119,7 @@ impl ToBytes for Value {
                 result.push(ACCT_ID);
                 let mut bytes = a.to_bytes()?;
                 if bytes.len() >= u32::max_value() as usize - result.len() {
-                    return Err(Error::OutOfMemoryError);
+                    return Err(bytesrepr::Error::OutOfMemoryError);
                 }
                 result.append(&mut bytes);
                 Ok(result)
@@ -122,7 +127,7 @@ impl ToBytes for Value {
             Contract(c) => Ok(iter::once(CONTRACT_ID).chain(c.to_bytes()?).collect()),
             NamedKey(n, k) => {
                 if n.len() + UREF_SIZE >= u32::max_value() as usize - U32_SIZE - U8_SIZE {
-                    return Err(Error::OutOfMemoryError);
+                    return Err(bytesrepr::Error::OutOfMemoryError);
                 }
                 let size: usize = U8_SIZE + //size for ID
                   U32_SIZE +                 //size for length of String
@@ -147,7 +152,7 @@ impl ToBytes for Value {
                 result.push(LISTSTRING_ID);
                 let bytes = arr.to_bytes()?;
                 if bytes.len() >= u32::max_value() as usize - result.len() {
-                    return Err(Error::OutOfMemoryError);
+                    return Err(bytesrepr::Error::OutOfMemoryError);
                 }
                 result.append(&mut arr.to_bytes()?);
                 Ok(result)
@@ -162,8 +167,9 @@ impl ToBytes for Value {
         }
     }
 }
+
 impl FromBytes for Value {
-    fn from_bytes(bytes: &[u8]) -> Result<(Self, &[u8]), Error> {
+    fn from_bytes(bytes: &[u8]) -> Result<(Self, &[u8]), bytesrepr::Error> {
         let (id, rest): (u8, &[u8]) = FromBytes::from_bytes(bytes)?;
         match id {
             INT32_ID => {
@@ -220,12 +226,29 @@ impl FromBytes for Value {
                 let (num, rem): (u64, &[u8]) = FromBytes::from_bytes(rest)?;
                 Ok((UInt64(num), rem))
             }
-            _ => Err(Error::FormattingError),
+            _ => Err(bytesrepr::Error::FormattingError),
         }
     }
 }
 
 impl Value {
+    /// Creates new value based on a value that can be serialized to bytes.
+    pub fn from_serializable(t: impl ToBytes) -> Result<Value, bytesrepr::Error> {
+        let serialized = t.to_bytes()?;
+        Ok(Value::ByteArray(serialized))
+    }
+
+    /// Tries to deserialize byte array into a value
+    pub fn try_deserialize<T: FromBytes>(self) -> Result<T, bytesrepr::Error> {
+        match self {
+            Value::ByteArray(bytes) => bytesrepr::deserialize(&bytes),
+            _ => Err(bytesrepr::Error::custom(format!(
+                "Unable to deserialize value of type {}",
+                self.type_string()
+            ))),
+        }
+    }
+
     pub fn type_string(&self) -> String {
         match self {
             Int32(_) => String::from("Value::Int32"),
@@ -244,6 +267,43 @@ impl Value {
             UInt64(_) => String::from("Value::UInt64"),
         }
     }
+
+    /// Returns an optional if the value holds a Key variant
+    pub fn as_key(&self) -> Option<&Key> {
+        match self {
+            Value::Key(key) => Some(key),
+            _ => None,
+        }
+    }
+
+    /// This method consumes given instance of Value and returns a vector of URefs that can be found
+    /// in currently held variant of Value
+    pub fn extract_urefs(&self) -> Vec<URef> {
+        let mut urefs: Vec<URef> = Vec::new();
+        match *self {
+            Value::NamedKey(_, Key::URef(uref)) | Value::Key(Key::URef(uref)) => urefs.push(uref),
+            Value::Account(ref account) => {
+                // Extracts all known urefs from account's urefs
+                urefs.extend(account.urefs_lookup().values().filter_map(Key::as_uref));
+                // Account has a purse which is an URef too
+                urefs.push(account.purse_id().value());
+            }
+            Value::Contract(ref contract) => {
+                // Extracts all known urefs from contract's urefs
+                urefs.extend(contract.urefs_lookup().values().filter_map(Key::as_uref))
+            }
+            _ => {}
+        }
+        urefs
+    }
+}
+
+/// Deserializes argument list from a single slice of bytes.
+pub fn deserialize_arguments(bytes: &[u8]) -> Result<Vec<Value>, bytesrepr::Error> {
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    bytesrepr::deserialize(bytes)
 }
 
 macro_rules! from_try_from_impl {
@@ -280,6 +340,12 @@ from_try_from_impl!(String, String);
 from_try_from_impl!(key::Key, Key);
 from_try_from_impl!(account::Account, Account);
 from_try_from_impl!(contract::Contract, Contract);
+
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Value::String(s.into())
+    }
+}
 
 impl From<URef> for Value {
     fn from(uref: URef) -> Self {
@@ -320,5 +386,156 @@ impl TryFrom<Value> for () {
         } else {
             Err(())
         }
+    }
+}
+
+impl FromBytes for Vec<Value> {
+    fn from_bytes(bytes: &[u8]) -> Result<(Self, &[u8]), bytesrepr::Error> {
+        let (size, mut stream): (u32, &[u8]) = FromBytes::from_bytes(bytes)?;
+        let mut result = Vec::new();
+        result.try_reserve_exact(size as usize)?;
+        for _ in 0..size {
+            let (s, rem): (Value, &[u8]) = FromBytes::from_bytes(stream)?;
+            result.push(s);
+            stream = rem;
+        }
+        Ok((result, stream))
+    }
+}
+
+impl ToBytes for Vec<Value> {
+    fn to_bytes(&self) -> Result<Vec<u8>, bytesrepr::Error> {
+        let size = self.len() as u32;
+        let mut result: Vec<u8> = Vec::with_capacity(U32_SIZE + self.len());
+        result.extend(size.to_bytes()?);
+        result.extend(
+            self.iter()
+                .map(ToBytes::to_bytes)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten(),
+        );
+        Ok(result)
+    }
+}
+
+// This implements explicit specialization for TryFrom in/out Value for types
+// that are serializable, but Rust forbids us from doing generic impl based on
+// T: ToBytes or T: FromBytes.
+//
+// Once new Value variants are specified this macro will go away and each of the
+// specializations will be explicit.
+macro_rules! impl_support_for_serializable_types {
+    ( $($tt:ty)+) => (
+        $(impl TryFrom<Value> for $tt {
+            type Error = bytesrepr::Error;
+            fn try_from(value: Value) -> Result<Self, Self::Error> {
+                value.try_deserialize()
+            }
+        }
+
+        impl TryFrom<$tt> for Value {
+            type Error = bytesrepr::Error;
+            fn try_from(value: $tt) -> Result<Self, Self::Error> {
+                Value::from_serializable(value)
+            }
+        }
+    )+);
+}
+
+// TODO(mpapierski): Identify additional Value variant
+impl_support_for_serializable_types! {
+    [u8; 32]
+    BTreeMap<PublicKey, U512>
+    Option<PublicKey>
+    Option<PurseId>
+    Option<U512>
+    Option<u64>
+    Option<[u8; 32]>
+    Phase
+    PublicKey
+    u32
+    u8
+    Vec<Vec<u8>>
+    Weight
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alloc::string::ToString;
+    use crate::uref::AccessRights;
+    use crate::value::protocol_version::ProtocolVersion;
+    #[test]
+    fn extract_urefs_from_value_of_unit_variant() {
+        let value = Value::Unit;
+        assert!(value.extract_urefs().is_empty());
+    }
+
+    #[test]
+    fn extract_urefs_from_value_of_key_variant() {
+        let uref = URef::new([42; 32], AccessRights::READ_ADD_WRITE);
+        let value = Value::Key(Key::URef(uref));
+        assert_eq!(value.extract_urefs(), vec![uref,])
+    }
+
+    #[test]
+    fn extract_urefs_from_value_of_namedkey_variant() {
+        let uref = URef::new([42; 32], AccessRights::READ_ADD_WRITE);
+        let value = Value::NamedKey("Foo".to_string(), Key::URef(uref));
+        assert_eq!(value.extract_urefs(), vec![uref,])
+    }
+
+    #[test]
+    fn extract_urefs_from_value_of_account_variant() {
+        let purse_uref = URef::new([43; 32], AccessRights::READ_ADD_WRITE);
+        let foo_uref = URef::new([240; 32], AccessRights::READ_ADD_WRITE);
+        let bar_uref = URef::new([241; 32], AccessRights::READ_ADD_WRITE);
+
+        let urefs = {
+            let mut urefs = BTreeMap::new();
+            urefs.insert("aaa".to_string(), Key::URef(foo_uref));
+            urefs.insert("bbb".to_string(), Key::URef(bar_uref));
+            urefs
+        };
+
+        let account = Account::new(
+            [123; 32],
+            urefs,
+            PurseId::new(purse_uref),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
+        let value = Value::Account(account);
+
+        let actual = {
+            let mut urefs = value.extract_urefs();
+            urefs.sort();
+            urefs
+        };
+
+        assert!(purse_uref < foo_uref);
+        assert!(foo_uref < bar_uref);
+
+        assert_eq!(actual, vec![purse_uref, foo_uref, bar_uref])
+    }
+
+    #[test]
+    fn extract_urefs_from_value_of_contract_variant() {
+        let foo_uref = URef::new([123; 32], AccessRights::READ_ADD_WRITE);
+        let bar_uref = URef::new([124; 32], AccessRights::READ_ADD_WRITE);
+
+        let urefs = {
+            let mut urefs = BTreeMap::new();
+            urefs.insert("aaa".to_string(), Key::URef(foo_uref));
+            urefs.insert("bbb".to_string(), Key::URef(bar_uref));
+            urefs
+        };
+
+        let protocol_version = ProtocolVersion::new(1);
+        let contract = Contract::new(vec![1, 2, 3], urefs, protocol_version);
+        let value = Value::Contract(contract);
+        assert_eq!(value.extract_urefs(), vec![foo_uref, bar_uref])
     }
 }

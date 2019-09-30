@@ -4,14 +4,14 @@ use std::rc::Rc;
 
 use parity_wasm::elements::Module;
 
-use contract_ffi::bytesrepr::{self, FromBytes};
 use contract_ffi::execution::Phase;
 use contract_ffi::key::Key;
 use contract_ffi::uref::AccessRights;
 use contract_ffi::value::account::{BlockTime, PublicKey};
-use contract_ffi::value::{Account, ProtocolVersion, Value};
+use contract_ffi::value::{self, Account, ProtocolVersion, Value};
 use engine_shared::gas::Gas;
 use engine_shared::newtypes::CorrelationId;
+use engine_shared::newtypes::Validated;
 use engine_storage::global_state::StateReader;
 
 use crate::engine_state::execution_result::ExecutionResult;
@@ -65,7 +65,7 @@ pub trait Executor<A> {
         R::Error: Into<Error>;
 
     #[allow(clippy::too_many_arguments)]
-    fn better_exec<R: StateReader<Key, Value>, T>(
+    fn better_exec<R: StateReader<Key, Value>>(
         &self,
         module: A,
         args: &[u8],
@@ -81,10 +81,9 @@ pub trait Executor<A> {
         correlation_id: CorrelationId,
         state: Rc<RefCell<TrackingCopy<R>>>,
         phase: Phase,
-    ) -> Result<T, Error>
+    ) -> Result<Value, Error>
     where
-        R::Error: Into<Error>,
-        T: FromBytes;
+        R::Error: Into<Error>;
 }
 
 pub struct WasmiExecutor;
@@ -159,23 +158,25 @@ impl Executor<Module> for WasmiExecutor {
         // only nonce update can be returned.
         let effects_snapshot = tc.borrow().effect();
 
-        let arguments: Vec<Vec<u8>> = if args.is_empty() {
-            Vec::new()
-        } else {
-            // TODO: figure out how this works with the cost model
-            // https://casperlabs.atlassian.net/browse/EE-239
-            on_fail_charge!(
-                bytesrepr::deserialize(args),
-                Gas::from_u64(args.len() as u64),
-                effects_snapshot
-            )
-        };
+        // TODO: figure out how this works with the cost model
+        // https://casperlabs.atlassian.net/browse/EE-239
+        let arguments = on_fail_charge!(
+            value::deserialize_arguments(args),
+            Gas::from_u64(args.len() as u64),
+            effects_snapshot
+        );
+
+        let validated_args = arguments
+            .into_iter()
+            .map(|value| Validated::new(value, Validated::valid))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("should always validate");
 
         let context = RuntimeContext::new(
             tc,
             &mut uref_lookup_local,
             known_urefs,
-            arguments,
+            validated_args,
             authorized_keys,
             &account,
             base_key,
@@ -191,6 +192,7 @@ impl Executor<Module> for WasmiExecutor {
         );
 
         let mut runtime = Runtime::new(memory, parity_module, context);
+
         on_fail_charge!(
             instance.invoke_export("call", &[], &mut runtime),
             runtime.context().gas_counter(),
@@ -236,21 +238,22 @@ impl Executor<Module> for WasmiExecutor {
         // can be returned.
         let effects_snapshot = state.borrow().effect();
 
-        let args: Vec<Vec<u8>> = if args.is_empty() {
-            Vec::new()
-        } else {
-            on_fail_charge!(
-                bytesrepr::deserialize(args),
-                Gas::from_u64(args.len() as u64),
-                effects_snapshot
-            )
-        };
+        let args = on_fail_charge!(
+            value::deserialize_arguments(args),
+            Gas::from_u64(args.len() as u64),
+            effects_snapshot
+        );
+
+        let validated_args = args
+            .into_iter()
+            .map(|value| Validated::new(value, Validated::valid).unwrap())
+            .collect();
 
         let context = RuntimeContext::new(
             state,
             &mut uref_lookup,
             known_urefs,
-            args,
+            validated_args,
             authorization_keys,
             &account,
             base_key,
@@ -314,7 +317,7 @@ impl Executor<Module> for WasmiExecutor {
         }
     }
 
-    fn better_exec<R: StateReader<Key, Value>, T>(
+    fn better_exec<R: StateReader<Key, Value>>(
         &self,
         module: Module,
         args: &[u8],
@@ -330,18 +333,17 @@ impl Executor<Module> for WasmiExecutor {
         correlation_id: CorrelationId,
         state: Rc<RefCell<TrackingCopy<R>>>,
         phase: Phase,
-    ) -> Result<T, Error>
+    ) -> Result<Value, Error>
     where
         R::Error: Into<Error>,
-        T: FromBytes,
     {
         let known_keys = extract_access_rights_from_keys(keys.values().cloned());
+        let args = value::deserialize_arguments(args)?;
 
-        let args: Vec<Vec<u8>> = if args.is_empty() {
-            Vec::new()
-        } else {
-            bytesrepr::deserialize(args)?
-        };
+        let validated_args = args
+            .into_iter()
+            .map(|value| Validated::new(value, Validated::valid).unwrap())
+            .collect();
 
         let gas_counter = Gas::default();
 
@@ -349,7 +351,7 @@ impl Executor<Module> for WasmiExecutor {
             state,
             keys,
             known_keys.clone(),
-            args,
+            validated_args,
             authorization_keys.clone(),
             account,
             base_key,
@@ -372,21 +374,19 @@ impl Executor<Module> for WasmiExecutor {
             Err(error) => error,
             Ok(_) => {
                 // This duplicates the behavior of sub_call, but is admittedly rather questionable.
-                let ret = bytesrepr::deserialize(runtime.result())?;
-                return Ok(ret);
+                return Ok(runtime.result().to_owned());
             }
         };
 
-        let return_value_bytes: &[u8] = match return_error
+        let return_value: Value = match return_error
             .as_host_error()
             .and_then(|host_error| host_error.downcast_ref::<Error>())
         {
-            Some(Error::Ret(_)) => runtime.result(),
+            Some(Error::Ret(_)) => runtime.result().to_owned(),
             Some(Error::Revert(code)) => return Err(Error::Revert(*code)),
             _ => return Err(Error::Interpreter(return_error)),
         };
 
-        let ret = bytesrepr::deserialize(return_value_bytes)?;
-        Ok(ret)
+        Ok(return_value)
     }
 }

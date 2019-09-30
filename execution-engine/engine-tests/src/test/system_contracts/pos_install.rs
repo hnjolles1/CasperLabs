@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use contract_ffi::key::Key;
 use contract_ffi::uref::{AccessRights, URef};
 use contract_ffi::value::account::{PublicKey, PurseId};
@@ -7,6 +5,8 @@ use contract_ffi::value::Value;
 use contract_ffi::value::U512;
 use engine_core::engine_state::MAX_PAYMENT;
 use engine_shared::transform::Transform;
+use std::collections::BTreeMap;
+use std::convert::TryInto;
 
 use crate::support::exec_with_return;
 use crate::support::test_support::{
@@ -52,7 +52,7 @@ fn should_run_pos_install_contract() {
 
     let total_bond = genesis_validators.values().fold(U512::zero(), |x, y| x + y);
 
-    let (ret_value, ret_urefs, effect): (URef, _, _) = exec_with_return::exec(
+    let (ret_value, ret_urefs, effect): (Value, _, _) = exec_with_return::exec(
         &mut builder,
         SYSTEM_ADDR,
         "pos_install.wasm",
@@ -63,11 +63,16 @@ fn should_run_pos_install_contract() {
     )
     .expect("should run successfully");
 
+    let ret_value: URef = ret_value.try_into().expect("should contain URef");
+
     let prestate = builder.get_post_state_hash();
     builder.commit_effects(prestate, effect.transforms.clone());
 
     // should return a uref
-    assert_eq!(ret_value, ret_urefs[0]);
+    assert_eq!(
+        ret_value,
+        ret_urefs.get(0).cloned().expect("should return uref")
+    );
 
     // should have written a contract under that uref
     let known_urefs = match effect

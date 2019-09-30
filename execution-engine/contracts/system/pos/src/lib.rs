@@ -1,6 +1,5 @@
 #![cfg_attr(not(test), no_std)]
 
-#[macro_use]
 extern crate alloc;
 
 mod error;
@@ -15,7 +14,7 @@ use contract_ffi::execution::Phase;
 use contract_ffi::key::Key;
 use contract_ffi::uref::{AccessRights, URef};
 use contract_ffi::value::account::{BlockTime, PublicKey, PurseId};
-use contract_ffi::value::U512;
+use contract_ffi::value::{Value, U512};
 
 use crate::error::{Error, PurseLookupError, Result, ResultExt};
 use crate::queue::{QueueEntry, QueueLocal, QueueProvider};
@@ -337,10 +336,7 @@ pub fn delegate() {
             // Limit the access rights so only balance query and deposit are allowed.
             let rights_controlled_purse =
                 PurseId::new(URef::new(purse.value().addr(), AccessRights::READ_ADD));
-            contract_api::ret(
-                &rights_controlled_purse,
-                &vec![rights_controlled_purse.value()],
-            );
+            contract_api::ret(rights_controlled_purse);
         }
         "set_refund_purse" => {
             let purse_id: PurseId = match contract_api::get_arg(1) {
@@ -354,12 +350,12 @@ pub fn delegate() {
             // We purposely choose to remove the access rights so that we do not
             // accidentally give rights for a purse to some contract that is not
             // supposed to have it.
-            let result = get_refund_purse().map(|p| p.value().remove_access_rights());
-            if let Some(uref) = result {
-                contract_api::ret(&Some(PurseId::new(uref)), &vec![uref]);
-            } else {
-                contract_api::ret(&result, &Vec::new());
-            }
+            let result: Option<PurseId> = get_refund_purse()
+                .map(|p| p.value().remove_access_rights())
+                .map(PurseId::new);
+
+            // TODO(mpapierski): Identify additional Value variants
+            contract_api::ret(Value::from_serializable(result).unwrap());
         }
         "finalize_payment" => {
             let amount_spent: U512 = match contract_api::get_arg(1) {

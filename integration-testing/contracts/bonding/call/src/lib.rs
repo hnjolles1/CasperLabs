@@ -1,13 +1,10 @@
 #![no_std]
 
-#[macro_use]
-extern crate alloc;
 extern crate contract_ffi;
 use contract_ffi::contract_api::{
     call_contract, create_purse, get_arg, get_pos, main_purse, revert,
     transfer_from_purse_to_purse, PurseTransferResult,
 };
-use contract_ffi::key::Key;
 use contract_ffi::value::uint::U512;
 
 #[no_mangle]
@@ -22,7 +19,6 @@ pub extern "C" fn call() {
             let _result: () = call_contract(
                 pos_pointer,
                 &("bond", bond_amount, bonding_purse),
-                &vec![Key::URef(bonding_purse.value())],
             );
         }
 

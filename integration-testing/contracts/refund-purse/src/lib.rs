@@ -1,29 +1,21 @@
 #![no_std]
 
-#[macro_use]
-extern crate alloc;
 extern crate contract_ffi;
-use alloc::vec::Vec;
 
 use contract_ffi::contract_api;
 use contract_ffi::contract_api::pointers::ContractPointer;
-use contract_ffi::key::Key;
 use contract_ffi::value::account::PurseId;
-
-fn purse_to_key(p: &PurseId) -> Key {
-    Key::URef(p.value())
-}
+use contract_ffi::value::Value;
 
 fn set_refund_purse(pos: &ContractPointer, p: &PurseId) {
     contract_api::call_contract::<_, ()>(
         pos.clone(),
         &("set_refund_purse", *p),
-        &vec![purse_to_key(p)],
     );
 }
 
 fn get_refund_purse(pos: &ContractPointer) -> Option<PurseId> {
-    contract_api::call_contract(pos.clone(), &("get_refund_purse",), &Vec::new())
+    contract_api::call_contract(pos.clone(), &("get_refund_purse",))
 }
 
 #[no_mangle]

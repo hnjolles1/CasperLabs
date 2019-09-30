@@ -215,6 +215,7 @@ fn should_run_successful_bond_and_unbond() {
             "pos_bonding.wasm",
             (
                 String::from(TEST_UNBOND),
+                // TODO(mpapierski): Identify additional Value variants
                 Some(U512::from(ACCOUNT_1_UNBOND_1)),
             ),
             DEFAULT_BLOCK_TIME,
@@ -275,6 +276,7 @@ fn should_run_successful_bond_and_unbond() {
             "pos_bonding.wasm",
             (
                 String::from(TEST_UNBOND),
+                // TODO(mpapierski): Identify additional Value variants
                 Some(U512::from(GENESIS_ACCOUNT_UNBOND_1)),
             ),
             DEFAULT_BLOCK_TIME,
@@ -324,6 +326,7 @@ fn should_run_successful_bond_and_unbond() {
             "pos_bonding.wasm",
             (
                 String::from(TEST_UNBOND),
+                // TODO(mpapierski): Identify additional Value variants
                 Some(U512::from(ACCOUNT_1_UNBOND_2)),
             ), // <-- rest of accont1's funds
             DEFAULT_BLOCK_TIME,
@@ -542,7 +545,11 @@ fn should_fail_unbonding_validator_without_bonding_first() {
             STANDARD_PAYMENT_CONTRACT,
             (U512::from(MAX_PAYMENT),),
             "pos_bonding.wasm",
-            (String::from(TEST_UNBOND), Some(U512::from(42))),
+            (
+                String::from(TEST_UNBOND),
+                // TODO(mpapierski): Identify additional Value variants
+                Some(U512::from(42)),
+            ),
             DEFAULT_BLOCK_TIME,
             [1; 32],
         )

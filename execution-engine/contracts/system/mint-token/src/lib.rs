@@ -1,7 +1,6 @@
 #![no_std]
 #![feature(cell_update)]
 
-#[macro_use]
 extern crate alloc;
 extern crate contract_ffi;
 
@@ -23,7 +22,7 @@ use contract_ffi::key::Key;
 use contract_ffi::system_contracts::mint::error::Error;
 use contract_ffi::uref::{AccessRights, URef};
 use contract_ffi::value::account::KEY_SIZE;
-use contract_ffi::value::U512;
+use contract_ffi::value::{Value, U512};
 
 use capabilities::{ARef, RAWRef};
 use internal_purse_id::{DepositId, WithdrawId};
@@ -90,7 +89,7 @@ pub fn delegate() {
 
     match method_name.as_str() {
         // argument: U512
-        // return: Result<URef, mint::error::Error>
+        // return: URef
         "mint" => {
             let amount: U512 = match contract_api::get_arg(1) {
                 Some(Ok(data)) => data,
@@ -98,21 +97,22 @@ pub fn delegate() {
                 None => contract_api::revert(ApiError::MissingArgument.into()),
             };
 
-            let maybe_purse_key = mint
+            let purse_uref = mint
                 .mint(amount)
-                .map(|purse_id| URef::new(purse_id.raw_id(), AccessRights::READ_ADD_WRITE));
+                .map(|purse_id| URef::new(purse_id.raw_id(), AccessRights::READ_ADD_WRITE))
+                // NOTE: This unwraps mint's error at the call site because callers expects a single
+                // Value for URef verification purposes. If it transferred as
+                // Value::ByteArray then the URef can't be inferred from the return value, and it
+                // can raise unexpected ForgedReference errors.
+                .unwrap_or_else(|e| contract_api::revert(e as u32));
 
-            if let Ok(purse_key) = maybe_purse_key {
-                contract_api::ret(&maybe_purse_key, &vec![purse_key])
-            } else {
-                contract_api::ret(&maybe_purse_key, &vec![])
-            }
+            contract_api::ret(purse_uref)
         }
 
         "create" => {
             let purse_id = mint.create();
             let purse_key = URef::new(purse_id.raw_id(), AccessRights::READ_ADD_WRITE);
-            contract_api::ret(&purse_key, &vec![purse_key])
+            contract_api::ret(purse_key)
         }
 
         "balance" => {
@@ -125,7 +125,7 @@ pub fn delegate() {
             let balance_uref = mint.lookup(purse_id);
             let balance: Option<U512> =
                 balance_uref.and_then(|uref| contract_api::read(uref.into()).unwrap_or_default());
-            contract_api::ret(&balance, &vec![])
+            contract_api::ret(Value::from_serializable(balance).unwrap());
         }
 
         "transfer" => {
@@ -149,7 +149,8 @@ pub fn delegate() {
                 Ok(withdraw_id) => withdraw_id,
                 Err(error) => {
                     let transfer_result: Result<(), Error> = Err(error.into());
-                    contract_api::ret(&transfer_result, &vec![])
+                    // TODO(mpapierski): Identify additional Value variants
+                    contract_api::ret(Value::from_serializable(transfer_result).unwrap());
                 }
             };
 
@@ -157,12 +158,13 @@ pub fn delegate() {
                 Ok(deposit_id) => deposit_id,
                 Err(error) => {
                     let transfer_result: Result<(), Error> = Err(error.into());
-                    contract_api::ret(&transfer_result, &vec![])
+                    // TODO(mpapierski): Identify additional Value variants
+                    contract_api::ret(Value::from_serializable(transfer_result).unwrap());
                 }
             };
 
             let transfer_result = mint.transfer(source, target, amount);
-            contract_api::ret(&transfer_result, &vec![]);
+            contract_api::ret(Value::from_serializable(transfer_result).unwrap());
         }
 
         _ => panic!("Unknown method name!"),

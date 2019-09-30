@@ -1,11 +1,9 @@
 #![no_std]
 
-#[macro_use]
 extern crate alloc;
 extern crate contract_ffi;
 use alloc::string::String;
 use contract_ffi::contract_api::{self, Error, PurseTransferResult};
-use contract_ffi::key::Key;
 use contract_ffi::value::account::PurseId;
 use contract_ffi::value::U512;
 
@@ -41,13 +39,9 @@ pub extern "C" fn call() {
     let pos_pointer = contract_api::get_pos();
 
     let payment_purse: PurseId =
-        contract_api::call_contract(pos_pointer.clone(), &(GET_PAYMENT_PURSE,), &vec![]);
+        contract_api::call_contract(pos_pointer.clone(), &(GET_PAYMENT_PURSE,));
 
-    contract_api::call_contract::<_, ()>(
-        pos_pointer,
-        &(SET_REFUND_PURSE, purse),
-        &vec![Key::URef(purse.value())],
-    );
+    contract_api::call_contract::<_, ()>(pos_pointer, &(SET_REFUND_PURSE, purse));
 
     if let PurseTransferResult::TransferError =
         contract_api::transfer_from_purse_to_purse(purse, payment_purse, amount)

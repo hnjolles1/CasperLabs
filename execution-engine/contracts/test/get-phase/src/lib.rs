@@ -1,6 +1,7 @@
 #![no_std]
 
 extern crate contract_ffi;
+extern crate core;
 
 use contract_ffi::contract_api::{self, Error};
 use contract_ffi::execution::Phase;

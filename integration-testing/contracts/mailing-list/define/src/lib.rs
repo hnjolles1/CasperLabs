@@ -11,8 +11,14 @@ extern crate contract_ffi;
 
 use contract_ffi::contract_api::pointers::TURef;
 use contract_ffi::contract_api::*;
+use contract_ffi::contract_api::Error as ApiError;
 use contract_ffi::key::Key;
 use contract_ffi::uref::URef;
+
+
+enum Error {
+    MissingTURef = 1,
+}
 
 fn get_list_key(name: &str) -> TURef<Vec<String>> {
     get_uref(name).unwrap().to_turef().unwrap()
@@ -22,8 +28,8 @@ fn update_list(name: String) {
     let list_key = get_list_key("list");
     let mut list = match read(list_key.clone()) {
         Ok(Some(list)) => list,
-        Ok(None) => revert(Error::ValueNotFound.into()),
-        Err(_) => revert(Error::Read.into()),
+        Ok(None) => revert(ApiError::ValueNotFound.into()),
+        Err(_) => revert(ApiError::Read.into()),
     };
     list.push(name);
     write(list_key, list);
@@ -46,15 +52,15 @@ fn sub(name: String) -> Option<TURef<Vec<String>>> {
 fn publish(msg: String) {
     let curr_list = match read(get_list_key("list")) {
         Ok(Some(list)) => list,
-        Ok(None) => revert(Error::ValueNotFound.into()),
-        Err(_) => revert(Error::Read.into()),
+        Ok(None) => revert(ApiError::ValueNotFound.into()),
+        Err(_) => revert(ApiError::Read.into()),
     };
     for name in curr_list.iter() {
         let uref = get_list_key(name);
         let mut messages = match read(uref.clone()) {
             Ok(Some(messages)) => messages,
-            Ok(None) => revert(Error::ValueNotFound.into()),
-            Err(_) => revert(Error::Read.into()),
+            Ok(None) => revert(ApiError::ValueNotFound.into()),
+            Err(_) => revert(ApiError::Read.into()),
         };
         messages.push(msg.clone());
         write(uref, messages);
@@ -68,10 +74,9 @@ pub extern "C" fn mailing_list_ext() {
         "sub" => match sub(get_arg(1).unwrap().unwrap()) {
             Some(turef) => {
                 let extra_uref = URef::new(turef.addr(), turef.access_rights());
-                let extra_urefs = vec![extra_uref];
-                ret(&Some(Key::from(turef)), &extra_urefs);
+                ret(extra_uref);
             }
-            _ => ret(&Option::<Key>::None, &Vec::new()),
+            _ => revert(Error::MissingTURef as u32),
         },
         //Note that this is totally insecure. In reality
         //the pub method would be only available under an

@@ -1,8 +1,9 @@
 use crate::bytesrepr::{Error, FromBytes, ToBytes, U32_SIZE, U64_SIZE, U8_SIZE};
 use crate::key::{addr_to_hex, Key, UREF_SIZE};
 use crate::uref::{AccessRights, URef, UREF_SIZE_SERIALIZED};
+use crate::value::{TypeMismatch, Value};
 use alloc::collections::{btree_map::BTreeMap, btree_set::BTreeSet};
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt::{Debug, Display, Formatter};
@@ -21,6 +22,22 @@ pub struct TryFromSliceForPublicKeyError(());
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PurseId(URef);
+
+impl TryFrom<Value> for PurseId {
+    type Error = TypeMismatch;
+    fn try_from(value: Value) -> Result<PurseId, Self::Error> {
+        match value {
+            Value::Key(Key::URef(uref)) => Ok(PurseId::new(uref)),
+            _ => Err(TypeMismatch::new("URef".to_string(), value.type_string())),
+        }
+    }
+}
+
+impl From<PurseId> for Value {
+    fn from(value: PurseId) -> Value {
+        Value::Key(Key::URef(value.value()))
+    }
+}
 
 impl PurseId {
     pub fn new(uref: URef) -> Self {

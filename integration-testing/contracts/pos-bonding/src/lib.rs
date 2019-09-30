@@ -1,10 +1,8 @@
 #![no_std]
 
-#[macro_use]
 extern crate alloc;
 extern crate contract_ffi;
 use alloc::string::String;
-use alloc::vec::Vec;
 
 use contract_ffi::contract_api::pointers::ContractPointer;
 use contract_ffi::contract_api::{
@@ -12,9 +10,8 @@ use contract_ffi::contract_api::{
     transfer_from_purse_to_account, transfer_from_purse_to_purse, Error as ApiError,
     PurseTransferResult, TransferResult,
 };
-use contract_ffi::key::Key;
 use contract_ffi::value::account::{PublicKey, PurseId};
-use contract_ffi::value::U512;
+use contract_ffi::value::{U512, Value};
 
 #[repr(u16)]
 enum Error {
@@ -22,20 +19,15 @@ enum Error {
     UnknownCommand,
 }
 
-fn purse_to_key(p: PurseId) -> Key {
-    Key::URef(p.value())
-}
-
 fn bond(pos: &ContractPointer, amount: &U512, source: PurseId) {
     call_contract::<_, ()>(
         pos.clone(),
         &(POS_BOND, *amount, source),
-        &vec![purse_to_key(source)],
     );
 }
 
 fn unbond(pos: &ContractPointer, amount: Option<U512>) {
-    call_contract::<_, ()>(pos.clone(), &(POS_UNBOND, amount), &Vec::<Key>::new());
+    call_contract::<_, ()>(pos.clone(), &(POS_UNBOND, amount));
 }
 
 const POS_BOND: &str = "bond";

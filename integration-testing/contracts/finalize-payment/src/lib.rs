@@ -1,10 +1,6 @@
 #![no_std]
 
-#[macro_use]
-extern crate alloc;
 extern crate contract_ffi;
-
-use alloc::vec::Vec;
 
 use contract_ffi::contract_api::pointers::ContractPointer;
 use contract_ffi::contract_api::{self, PurseTransferResult};
@@ -12,20 +8,15 @@ use contract_ffi::key::Key;
 use contract_ffi::value::account::{PublicKey, PurseId};
 use contract_ffi::value::U512;
 
-fn purse_to_key(p: &PurseId) -> Key {
-    Key::URef(p.value())
-}
-
 fn set_refund_purse(pos: &ContractPointer, p: &PurseId) {
     contract_api::call_contract::<_, ()>(
         pos.clone(),
         &("set_refund_purse", *p),
-        &vec![purse_to_key(p)],
     );
 }
 
 fn get_payment_purse(pos: &ContractPointer) -> PurseId {
-    contract_api::call_contract(pos.clone(), &("get_payment_purse",), &Vec::new())
+    contract_api::call_contract(pos.clone(), &("get_payment_purse",))
 }
 
 fn submit_payment(pos: &ContractPointer, amount: U512) {
@@ -42,7 +33,6 @@ fn finalize_payment(pos: &ContractPointer, amount_spent: U512, account: PublicKe
     contract_api::call_contract::<_, ()>(
         pos.clone(),
         &("finalize_payment", amount_spent, account),
-        &Vec::new(),
     )
 }
 

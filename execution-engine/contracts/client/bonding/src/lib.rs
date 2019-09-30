@@ -1,10 +1,8 @@
 #![no_std]
 
-#[macro_use]
 extern crate alloc;
 extern crate contract_ffi;
 use contract_ffi::contract_api::{self, Error, PurseTransferResult};
-use contract_ffi::key::Key;
 use contract_ffi::value::uint::U512;
 
 const BOND_METHOD_NAME: &str = "bond";
@@ -28,7 +26,6 @@ pub extern "C" fn call() {
         PurseTransferResult::TransferSuccessful => contract_api::call_contract(
             pos_pointer,
             &(BOND_METHOD_NAME, bond_amount, bonding_purse),
-            &vec![Key::URef(bonding_purse.value())],
         ),
 
         PurseTransferResult::TransferError => contract_api::revert(Error::Transfer.into()),

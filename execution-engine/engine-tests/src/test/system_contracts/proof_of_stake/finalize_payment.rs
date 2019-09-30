@@ -59,6 +59,7 @@ fn finalize_payment_should_not_be_run_by_non_system_accounts() {
     let payment_amount = U512::from(300);
     let spent_amount = U512::from(75);
     let refund_purse: Option<PurseId> = None;
+
     let args = (
         payment_amount,
         refund_purse,
@@ -99,8 +100,14 @@ fn finalize_payment_should_refund_to_specified_purse() {
     let refund_purse_flag: u8 = 1;
     // Don't need to run finalize_payment manually, it happens during
     // the deploy because payment code is enabled.
-    let args: (U512, u8, Option<U512>, Option<PublicKey>) =
-        (payment_amount, refund_purse_flag, None, None);
+
+    // TODO(mpapierski): Identify additional Value variants
+    let args = (
+        payment_amount,
+        refund_purse_flag,
+        None as Option<U512>,
+        None as Option<PublicKey>,
+    );
 
     builder.run_genesis(&DEFAULT_GENESIS_CONFIG);
 

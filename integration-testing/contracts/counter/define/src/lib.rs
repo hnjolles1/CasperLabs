@@ -4,7 +4,6 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::vec::Vec;
 
 extern crate contract_ffi;
 
@@ -24,7 +23,7 @@ pub extern "C" fn counter_ext() {
                 Ok(None) => revert(Error::ValueNotFound.into()),
                 Err(_) => revert(Error::Read.into()),
             };
-            ret(&result, &Vec::new());
+            ret(result);
         }
         _ => panic!("Unknown method name!"),
     }

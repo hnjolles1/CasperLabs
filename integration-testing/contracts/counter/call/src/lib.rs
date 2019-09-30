@@ -1,8 +1,5 @@
 #![no_std]
 
-extern crate alloc;
-use alloc::vec::Vec;
-
 extern crate contract_ffi;
 use contract_ffi::contract_api::pointers::ContractPointer;
 use contract_ffi::contract_api::{call_contract, get_uref, revert};
@@ -19,11 +16,11 @@ pub extern "C" fn call() {
 
     let _result: () = {
         let arg = "inc";
-        call_contract(pointer.clone(), &(arg,), &Vec::new())
+        call_contract(pointer.clone(), &(arg,))
     };
 
     let _value: i32 = {
         let arg = "get";
-        call_contract(pointer, &(arg,), &Vec::new())
+        call_contract(pointer, &(arg,))
     };
 }

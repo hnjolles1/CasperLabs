@@ -75,10 +75,7 @@ impl DeployBuilder {
 
     pub fn with_payment_code(mut self, file_name: &str, args: impl ArgsParser) -> Self {
         let wasm_bytes = read_wasm_file_bytes(file_name);
-        let args = args
-            .parse()
-            .and_then(|args_bytes| ToBytes::to_bytes(&args_bytes))
-            .expect("should serialize args");
+        let args = args.parse().expect("should serialize args");
         let mut payment = DeployCode::new();
         payment.set_code(wasm_bytes);
         payment.set_args(args);
@@ -88,10 +85,7 @@ impl DeployBuilder {
 
     pub fn with_session_code(mut self, file_name: &str, args: impl ArgsParser) -> Self {
         let wasm_bytes = read_wasm_file_bytes(file_name);
-        let args = args
-            .parse()
-            .and_then(|args_bytes| ToBytes::to_bytes(&args_bytes))
-            .expect("should serialize args");
+        let args = args.parse().expect("should serialize args");
         let mut session = DeployCode::new();
         session.set_code(wasm_bytes);
         session.set_args(args);

@@ -1,11 +1,14 @@
 use bitflags;
+use core::convert::TryFrom;
 
-use crate::alloc::string::String;
+use crate::alloc::string::{String, ToString};
 use crate::alloc::vec::Vec;
 use crate::base16;
 use crate::bytesrepr;
 use crate::bytesrepr::{OPTION_SIZE, U32_SIZE};
 use crate::contract_api::pointers::TURef;
+use crate::key::Key;
+use crate::value::{TypeMismatch, Value};
 
 pub const UREF_ADDR_SIZE: usize = 32;
 pub const ACCESS_RIGHTS_SIZE: usize = 1;
@@ -221,6 +224,17 @@ impl bytesrepr::ToBytes for Vec<URef> {
 impl<T> From<TURef<T>> for URef {
     fn from(input: TURef<T>) -> Self {
         URef(input.addr(), Some(input.access_rights()))
+    }
+}
+
+impl TryFrom<Value> for URef {
+    type Error = TypeMismatch;
+
+    fn try_from(value: Value) -> Result<URef, Self::Error> {
+        match value {
+            Value::Key(Key::URef(uref)) => Ok(uref),
+            _ => Err(TypeMismatch::new("URef".to_string(), value.type_string())),
+        }
     }
 }
 

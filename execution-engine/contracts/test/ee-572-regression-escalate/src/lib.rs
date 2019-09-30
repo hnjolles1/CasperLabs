@@ -5,7 +5,6 @@ extern crate alloc;
 extern crate contract_ffi;
 
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 
 use contract_ffi::contract_api::pointers::{ContractPointer, TURef};
 use contract_ffi::contract_api::{self, Error as ApiError};
@@ -32,7 +31,7 @@ pub extern "C" fn call() {
         None => contract_api::revert(ApiError::MissingArgument.into()),
     };
 
-    let reference: URef = contract_api::call_contract(contract_pointer, &(), &Vec::new());
+    let reference: URef = contract_api::call_contract(contract_pointer, &());
 
     let forged_reference: TURef<String> = {
         let ret = URef::new(reference.addr(), AccessRights::READ_ADD_WRITE);

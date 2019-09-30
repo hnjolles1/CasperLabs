@@ -8,10 +8,8 @@ use contract_ffi::value::account::{ActionType, Weight};
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let km_weight: u32 = get_arg(0).unwrap().unwrap();
-    let dep_weight: u32 = get_arg(1).unwrap().unwrap();
-    let key_management_threshold = Weight::new(km_weight as u8);
-    let deploy_threshold = Weight::new(dep_weight as u8);
+    let key_management_threshold: Weight = get_arg(0).unwrap().unwrap();
+    let deploy_threshold: Weight = get_arg(1).unwrap().unwrap();
 
     if key_management_threshold != Weight::new(0) {
         set_action_threshold(ActionType::KeyManagement, key_management_threshold)

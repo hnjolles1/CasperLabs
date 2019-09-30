@@ -9,7 +9,7 @@ use crate::test::{DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG};
 #[ignore]
 #[test]
 fn should_not_fail_deserializing() {
-    let is_error = InMemoryWasmTestBuilder::default()
+    let result = InMemoryWasmTestBuilder::default()
         .run_genesis(&DEFAULT_GENESIS_CONFIG)
         .exec_with_args(
             DEFAULT_ACCOUNT_ADDR,
@@ -21,7 +21,7 @@ fn should_not_fail_deserializing() {
             [1u8; 32],
         )
         .commit()
-        .is_error();
+        .finish();
 
-    assert!(is_error);
+    assert!(result.builder().is_error());
 }

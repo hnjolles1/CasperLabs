@@ -24,7 +24,7 @@ fn hello_name(name: &str) -> String {
 pub extern "C" fn hello_name_ext() {
     let name: String = get_arg(0).unwrap().unwrap();
     let y = hello_name(&name);
-    ret(&y, &Vec::new());
+    ret(y);
 }
 
 fn get_list_key(name: &str) -> TURef<Vec<String>> {
@@ -80,10 +80,9 @@ pub extern "C" fn mailing_list_ext() {
         "sub" => match sub(get_arg(1).unwrap().unwrap()) {
             Some(turef) => {
                 let extra_uref = URef::new(turef.addr(), turef.access_rights());
-                let extra_urefs = vec![extra_uref];
-                ret(&Some(Key::from(turef)), &extra_urefs);
+                ret(extra_uref)
             }
-            _ => ret(&Option::<Key>::None, &Vec::new()),
+            _ => revert(1),
         },
         //Note that this is totally insecure. In reality
         //the pub method would be only available under an
@@ -108,7 +107,7 @@ pub extern "C" fn counter_ext() {
                 Ok(None) => revert(Error::ValueNotFound.into()),
                 Err(_) => revert(Error::Read.into()),
             };
-            ret(&result, &Vec::new());
+            ret(result);
         }
         _ => panic!("Unknown method name!"),
     }

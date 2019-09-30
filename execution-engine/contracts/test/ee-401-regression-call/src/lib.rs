@@ -20,9 +20,7 @@ pub extern "C" fn call() {
         _ => contract_api::revert(Error::UnexpectedKeyVariant.into()),
     };
 
-    let extra_urefs = [].to_vec();
-
-    let result: URef = contract_api::call_contract(contract_pointer, &(), &extra_urefs);
+    let result: URef = contract_api::call_contract(contract_pointer, &());
 
     let value = contract_api::read(TURef::from_uref(result).unwrap());
 

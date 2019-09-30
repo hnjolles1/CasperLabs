@@ -15,7 +15,7 @@ use contract_ffi::value::account::{
     Account, ActionType, AddKeyFailure, BlockTime, PublicKey, RemoveKeyFailure,
     SetThresholdFailure, UpdateKeyFailure, Weight,
 };
-use contract_ffi::value::{Contract, ProtocolVersion, Value};
+use contract_ffi::value::{Contract, ProtocolVersion, TypeMismatch, Value};
 use engine_shared::gas::Gas;
 use engine_shared::newtypes::{CorrelationId, Validated};
 use engine_storage::global_state::StateReader;
@@ -37,7 +37,7 @@ pub struct RuntimeContext<'a, R> {
     known_urefs: HashMap<Address, HashSet<AccessRights>>,
     // Original account for read only tasks taken before execution
     account: &'a Account,
-    args: Vec<Vec<u8>>,
+    args: Vec<Validated<Value>>,
     authorization_keys: BTreeSet<PublicKey>,
     // Key pointing to the entity we are currently running
     //(could point at an account or contract in the global state)
@@ -62,7 +62,7 @@ where
         state: Rc<RefCell<TrackingCopy<R>>>,
         uref_lookup: &'a mut BTreeMap<String, Key>,
         known_urefs: HashMap<Address, HashSet<AccessRights>>,
-        args: Vec<Vec<u8>>,
+        args: Vec<Validated<Value>>,
         authorization_keys: BTreeSet<PublicKey>,
         account: &'a Account,
         base_key: Key,
@@ -169,7 +169,7 @@ where
                         .ok_or_else(|| Error::KeyNotFound(contract_uref))?;
 
                     value.try_into().map_err(|found| {
-                        Error::TypeMismatch(engine_shared::transform::TypeMismatch {
+                        Error::TypeMismatch(TypeMismatch {
                             expected: "Contract".to_owned(),
                             found,
                         })
@@ -212,7 +212,7 @@ where
         &self.account
     }
 
-    pub fn args(&self) -> &Vec<Vec<u8>> {
+    pub fn args(&self) -> &[Validated<Value>] {
         &self.args
     }
 
@@ -529,15 +529,14 @@ where
         }
     }
 
+    // Validates each of the given URefs passed as a slice
+    pub fn validate_urefs(&self, urefs: &[URef]) -> Result<(), Error> {
+        urefs.iter().try_for_each(|uref| self.validate_uref(uref))
+    }
+
     pub fn deserialize_keys(&self, bytes: &[u8]) -> Result<Vec<Key>, Error> {
         let keys: Vec<Key> = deserialize(bytes)?;
         keys.iter().try_for_each(|k| self.validate_key(k))?;
-        Ok(keys)
-    }
-
-    pub fn deserialize_urefs(&self, bytes: &[u8]) -> Result<Vec<URef>, Error> {
-        let keys: Vec<URef> = deserialize(bytes)?;
-        keys.iter().try_for_each(|k| self.validate_uref(k))?;
         Ok(keys)
     }
 
