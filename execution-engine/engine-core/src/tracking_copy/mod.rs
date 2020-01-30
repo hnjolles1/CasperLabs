@@ -278,37 +278,12 @@ impl<R: StateReader<Key, StoredValue>> TrackingCopy<R> {
                 0 as usize,
             ))),
             Some(base_value) => {
-                let result = path.iter().enumerate().try_fold(
-                    base_value,
-                    // We encode the two possible short-circuit conditions with
-                    // Result<(usize, String), Error>, where the Ok(_) case corresponds to
-                    // QueryResult::ValueNotFound and Err(_) corresponds to
-                    // a storage-related error. The information in the Ok(_) case is used
-                    // to build an informative error message about why the query was not successful.
-                    |current_value, (i, name)| -> Result<StoredValue, Result<(usize, String), R::Error>> {
-                        match current_value {
-                            StoredValue::Account(account) => {
-                                if let Some(key) = account.named_keys().get(name) {
-                                    self.read_key_or_stop(correlation_id, *key, i)
-                                } else {
-                                    Err(Ok((i, format!("Name {} not found in Account at path:", name))))
-                                }
-                            }
-
-                            StoredValue::Contract(contract) => {
-                                if let Some(key) = contract.named_keys().get(name) {
-                                    self.read_key_or_stop(correlation_id, *key, i)
-                                } else {
-                                    Err(Ok((i, format!("Name {} not found in Contract at path:", name))))
-                                }
-                            }
-
-                            other => Err(
-                                Ok((i, format!("Name {} cannot be followed from value {:?} because it is neither an account nor contract. Value found at path:", name, other)))
-                                ),
-                        }
-                    },
-                );
+                let result =
+                    path.iter()
+                        .enumerate()
+                        .try_fold(base_value, |current_value, (index, name)| {
+                            self.query_stored_value(current_value, correlation_id, index, name)
+                        });
 
                 match result {
                     Ok(value) => Ok(TrackingCopyQueryResult::Success(value)),
@@ -318,6 +293,68 @@ impl<R: StateReader<Key, StoredValue>> TrackingCopy<R> {
                     Err(Err(err)) => Err(err),
                 }
             }
+        }
+    }
+
+    fn query_stored_value(
+        &mut self,
+        current_value: StoredValue,
+        correlation_id: CorrelationId,
+        index: usize,
+        name: &str,
+    ) -> Result<StoredValue, Result<(usize, String), R::Error>> {
+        // We encode the three possible short-circuit conditions with
+        // Result<(usize, String), Error>, where the Ok(_) case corresponds to
+        // QueryResult::ValueNotFound and Err(_) corresponds to a storage-related error.  The
+        // information in the Ok(_) case is used to build an informative error message about why
+        // the query was not successful.
+        match current_value {
+            StoredValue::Account(account) => {
+                if let Some(key) = account.named_keys().get(name) {
+                    self.read_key_or_stop(correlation_id, *key, index)
+                } else {
+                    Err(Ok((
+                        index,
+                        format!("Name {} not found in Account at path:", name),
+                    )))
+                }
+            }
+
+            StoredValue::Contract(contract) => {
+                if let Some(key) = contract.named_keys().get(name) {
+                    self.read_key_or_stop(correlation_id, *key, index)
+                } else {
+                    Err(Ok((
+                        index,
+                        format!("Name {} not found in Contract at path:", name),
+                    )))
+                }
+            }
+
+            StoredValue::CLValue(cl_value) if cl_value.cl_type() == &CLType::Key => {
+                if let Ok(key) = cl_value.into_t() {
+                    match self.read_key_or_stop(correlation_id, key, index) {
+                        Ok(stored_value) => {
+                            self.query_stored_value(stored_value, correlation_id, index, name)
+                        }
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    Err(Ok((
+                        index,
+                        format!("Failed to parse as Key while handling {}:", name),
+                    )))
+                }
+            }
+
+            other => Err(Ok((
+                index,
+                format!(
+                    "Name {} cannot be followed from value {:?} because it is neither an account \
+                    nor contract. Value found at path:",
+                    name, other
+                ),
+            ))),
         }
     }
 

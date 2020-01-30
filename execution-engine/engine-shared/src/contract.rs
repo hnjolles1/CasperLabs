@@ -1,11 +1,14 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    fmt::{self, Debug, Formatter},
+};
 
 use types::{
     bytesrepr::{Error, FromBytes, ToBytes, U32_SERIALIZED_LENGTH, U64_SERIALIZED_LENGTH},
     Key, ProtocolVersion, KEY_UREF_SERIALIZED_LENGTH,
 };
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct Contract {
     bytes: Vec<u8>,
     named_keys: BTreeMap<String, Key>,
@@ -51,6 +54,16 @@ impl Contract {
 
     pub fn take_named_keys(self) -> BTreeMap<String, Key> {
         self.named_keys
+    }
+}
+
+impl Debug for Contract {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Contract {{ bytes: .., named_keys: {:?}, protocol_version: {} }}",
+            self.named_keys, self.protocol_version
+        )
     }
 }
 
